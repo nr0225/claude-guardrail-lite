@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "approval_ttl_seconds": 600,
+  "rules": [
+    {
+      "id": "self-protect",
+      "tools": [
+        "Bash"
+      ],
+      "approvable": false,
+      "pattern": "cg-approve|\\.claude-guardrail",
+      "why": "The agent may not touch the guardrail itself or its approval tool."
+    },
+    {
+      "id": "claude-settings",
+      "tools": [
+        "Edit",
+        "Write",
+        "MultiEdit"
+      ],
+      "field": "file_path",
+      "approvable": true,
+      "pattern": "(^|/)\\.claude/settings(\\.local)?\\.json$",
+      "why": "Editing Claude settings could switch the hooks off."
+    },
+    {
+      "id": "git-push-protected",
+      "tools": [
+        "Bash"
+      ],
+      "approvable": true,
+      "pattern": "\\bgit\\s+push\\b[^;&|]*(\\s--force(-with-lease)?\\b|\\s-f\\b|[\\s:+](main|master|production|prod)\\b)",
+      "why": "Force push, or push to main/master/production."
+    },
+    {
+      "id": "rm-recursive-force",
+      "tools": [
+        "Bash"
+      ],
+      "approvable": true,
+      "pattern": "\\brm\\s+(?:[^;&|]*\\s)?(-[a-zA-Z]*([rR][a-zA-Z]*f|f[a-zA-Z]*[rR])[a-zA-Z]*\\b|--recursive\\b[^;&|]*--force\\b|--force\\b[^;&|]*--recursive\\b)",
+      "why": "Recursive force delete."
+    }
+  ]
+}

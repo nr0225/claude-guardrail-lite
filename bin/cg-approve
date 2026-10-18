@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Human-side approval. Needs a real terminal, so the agent's Bash tool can't use it."""
+import os, sys, time
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from cg_common import RULES, APPROVALS, load_json, save_json, receipt
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("usage: cg-approve CODE"); sys.exit(1)
+    code = sys.argv[1].strip().upper()
+    try:
+        tty_in = open("/dev/tty", "r")
+        tty = open("/dev/tty", "w")
+    except OSError:
+        print("cg-approve needs an interactive terminal; refusing."); sys.exit(2)
+    tty.write("Approve %s for one run? Type the code again to confirm: " % code); tty.flush()
+    if tty_in.readline().strip().upper() != code:
+        tty.write("Not approved.\n"); sys.exit(3)
+    ttl = int(load_json(RULES, {}).get("approval_ttl_seconds", 600))
+    approvals = load_json(APPROVALS, {})
+    approvals[code] = {"expires": time.time() + ttl}
+    save_json(APPROVALS, approvals)
+    receipt({"decision": "approved", "code": code, "via": "cg-approve"})
+    tty.write("Approved %s for %d min. Tell Claude to retry the same command.\n" % (code, ttl // 60))
+
+
+if __name__ == "__main__":
+    main()

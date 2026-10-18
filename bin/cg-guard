@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""PreToolUse hook: deny risky calls unless a human approved this exact call out-of-band.
+
+Works in every permission mode because it never relies on "ask" (which auto mode
+silently allows, see anthropics/claude-code#89561). It always answers allow-by-silence
+or deny.
+"""
+import json, os, re, sys, time
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from cg_common import RULES, APPROVALS, load_json, save_json, fingerprint, receipt
+
+
+def deny(reason):
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason}}))
+    sys.exit(0)
+
+
+def subject_for(tool, tool_input, field):
+    if field:
+        return str(tool_input.get(field, ""))
+    if tool == "Bash":
+        return str(tool_input.get("command", ""))
+    return json.dumps(tool_input, sort_keys=True)
+
+
+def main():
+    try:
+        event = json.load(sys.stdin)
+    except Exception:
+        deny("claude-guardrail: could not parse hook input, failing closed.")
+    tool = event.get("tool_name", "")
+    tool_input = event.get("tool_input") or {}
+    cfg = load_json(RULES, None)
+    if not cfg:
+        deny("claude-guardrail: rules.json missing or invalid at %s, failing closed." % RULES)
+    ttl = int(cfg.get("approval_ttl_seconds", 600))
+
+    for rule in cfg.get("rules", []):
+        if tool not in rule.get("tools", []):
+            continue
+        subject = subject_for(tool, tool_input, rule.get("field"))
+        flags = re.IGNORECASE if rule.get("ignore_case") else 0
+        if not re.search(rule["pattern"], subject, flags | re.MULTILINE):
+            continue
+        base = {"tool": tool, "rule": rule["id"], "subject": subject[:500],
+                "session": event.get("session_id"), "mode": event.get("permission_mode")}
+        if not rule.get("approvable", True):
+            receipt(dict(base, decision="deny", approvable=False))
+            deny("claude-guardrail [%s]: %s This cannot be approved from inside the session." % (rule["id"], rule["why"]))
+        code = fingerprint(tool, subject)
+        approvals = load_json(APPROVALS, {})
+        now = time.time()
+        approvals = {k: v for k, v in approvals.items() if v.get("expires", 0) > now}
+        if code in approvals:
+            approvals.pop(code)
+            save_json(APPROVALS, approvals)
+            receipt(dict(base, decision="allow", code=code, via="human-approval"))
+            sys.exit(0)  # silence = normal permission flow continues
+        save_json(APPROVALS, approvals)
+        receipt(dict(base, decision="deny", code=code))
+        deny("claude-guardrail [%s]: %s Blocked. Approval code %s. Ask the human to run "
+             "`cg-approve %s` in their own terminal (valid %d min, this exact command only), "
+             "then retry the identical command. Do not try to approve it yourself."
+             % (rule["id"], rule["why"], code, code, ttl // 60))
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
