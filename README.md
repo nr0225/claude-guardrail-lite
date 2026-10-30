@@ -6,7 +6,7 @@
 > **⚠️ Beta（v0.1）**：尚未在實際 Claude Code session 中驗證，只以模擬的 PreToolUse 事件做過單元測試。**這是 regex 護欄，不是沙箱。**
 
 > 免費 lite 版只含 `git-push-protected`、`rm-recursive-force` 兩條規則（加上保護自身的 `self-protect`、`claude-settings`）。完整版另含 ORM、Terraform/K8s、SQL、.env 等規則與測試套件。
-> Free lite edition: two rules (`git-push-protected`, `rm-recursive-force`) plus self-protection. The full pack adds ORM, infra, SQL and .env rules plus a test suite.
+> Free lite edition: two rules (`git-push-protected`, `rm-recursive-force`) plus self-protection. The full pack adds ORM, infra, SQL and .env rules plus a test suite. [Get the full pack (US$19)](https://buy.polar.sh/polar_cl_Y93JwF9WRZO9j6w2v0tJJ5xAqwKJGnuufCWC72QKCm0).
 
 
 Claude Code 的「先擋再核准」護欄。高風險指令一律先 **deny**，人類在自己的終端機輸入一次性核准碼後才放行，每次決策都留一筆 JSONL 收據。
