@@ -31,8 +31,12 @@ def main():
         event = json.load(sys.stdin)
     except Exception:
         deny("claude-guardrail: could not parse hook input, failing closed.")
+    if not isinstance(event, dict):
+        deny("claude-guardrail: hook input is not a JSON object, failing closed.")
     tool = event.get("tool_name", "")
     tool_input = event.get("tool_input") or {}
+    if not isinstance(tool_input, dict):
+        deny("claude-guardrail: tool_input is not a JSON object, failing closed.")
     cfg = load_json(RULES, None)
     if not cfg:
         deny("claude-guardrail: rules.json missing or invalid at %s, failing closed." % RULES)
@@ -69,4 +73,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:  # any crash must not turn into a silent allow
+        deny("claude-guardrail: internal error (%s), failing closed." % type(e).__name__)
