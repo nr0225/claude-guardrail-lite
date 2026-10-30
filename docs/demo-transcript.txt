@@ -1,5 +1,5 @@
-# Real output of claude-guardrail-lite (branch lite-v0.1.1-fixes)
-# Generated 2026-10-30 15:49 CST by gen_demo.py in a throwaway HOME. Hook events are simulated JSON, not a live Claude Code session.
+# Real output of claude-guardrail-lite (branch lite-v0.1.2-on-pr1)
+# Generated 2026-10-30 18:24 CST by gen_demo.py in a throwaway HOME. Hook events are simulated JSON, not a live Claude Code session.
 
 # PreToolUse events as Claude Code sends them, piped by hand (simulated, auto mode)
 # hook X = pipe {"tool_name":"Bash","tool_input":{"command":X},"permission_mode":"auto"} into cg-guard
@@ -8,10 +8,10 @@ $ hook 'git push origin main' | python3 -m json.tool
     "hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
-        "permissionDecisionReason": "claude-guardrail [git-push-protected]: Force push, or push
-          to main/master/production. Blocked. Approval code 8888B4. Ask the human to run
-          `cg-approve 8888B4` in their own terminal (valid 10 min, this exact command only),
-          then retry the identical command. Do not try to approve it yourself."
+        "permissionDecisionReason": "claude-guardrail [git-push-protected]: Force push, mirror
+          push, or push to main/master/production. Blocked. Approval code 8888B4. Ask the human
+          to run `cg-approve 8888B4` in their own terminal (valid 10 min, this exact command
+          only), then retry the identical command. Do not try to approve it yourself."
     }
 }
 # a normal push: no output means no objection
@@ -19,7 +19,11 @@ $ hook 'git push origin feature/login'; echo "exit=$?"
 exit=0
 # the human approves from their own terminal (needs a real TTY)
 $ cg-approve 8888B4
-Approve 8888B4 for one run? Type the code again to confirm: 8888B4
+Blocked call 8888B4
+  tool: Bash
+  rule: git-push-protected
+  git push origin main
+Approve this exact call for one run? Type the code again to confirm: 8888B4
 Approved 8888B4 for 10 min. Tell Claude to retry the same command.
 # the identical command now passes once ...
 $ hook 'git push origin main'; echo "exit=$?"
@@ -31,8 +35,8 @@ $ hook 'git push origin main' | grep -o '"permissionDecision": "[a-z]*"'
 $ hook 'rm -rf ./build' | grep -o 'guardrail \[[a-z-]*\]'
 guardrail [rm-recursive-force]
 $ cg-receipts 7
-2026-10-30T15:49:15+0800  deny     git-push-protected   8888B4 git push origin main
-2026-10-30T15:49:15+0800  approved -                    8888B4 
-2026-10-30T15:49:15+0800  allow    git-push-protected   8888B4 git push origin main
-2026-10-30T15:49:15+0800  deny     git-push-protected   8888B4 git push origin main
-2026-10-30T15:49:15+0800  deny     rm-recursive-force   FE95A3 rm -rf ./build
+2026-10-30T18:24:18+0800  deny     git-push-protected   8888B4 git push origin main
+2026-10-30T18:24:18+0800  approved git-push-protected   8888B4 git push origin main
+2026-10-30T18:24:18+0800  allow    git-push-protected   8888B4 git push origin main
+2026-10-30T18:24:18+0800  deny     git-push-protected   8888B4 git push origin main
+2026-10-30T18:24:18+0800  deny     rm-recursive-force   FE95A3 rm -rf ./build

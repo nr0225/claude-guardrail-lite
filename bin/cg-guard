@@ -7,7 +7,14 @@ or deny.
 """
 import json, os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cg_common import RULES, APPROVALS, load_json, save_json, fingerprint, receipt
+from cg_common import (RULES, APPROVALS, load_json, save_json, fingerprint, digest, receipt,
+                       locked, load_state, touches_guardrail, bash_touches_guardrail,
+                       shell_variants, normalize_shell, strings_in, resolve)
+
+FILE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+MAX_BASH = 100000
+SELF_WHY = ("The agent may not read, write, run or redirect the guardrail's own files "
+            "(rules, approvals, cg-approve). This cannot be approved from inside the session.")
 
 
 def deny(reason):
@@ -18,12 +25,46 @@ def deny(reason):
     sys.exit(0)
 
 
+def path_of(tool_input):
+    for k in ("file_path", "notebook_path", "path"):
+        v = tool_input.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
 def subject_for(tool, tool_input, field):
+    if field == "file_path":
+        return path_of(tool_input)
     if field:
         return str(tool_input.get(field, ""))
     if tool == "Bash":
         return str(tool_input.get("command", ""))
     return json.dumps(tool_input, sort_keys=True)
+
+
+def variants_for(tool, subject, field, cwd):
+    """Raw subject first; extra variants only add matches."""
+    if tool == "Bash" and not field:
+        return shell_variants(subject, cwd)[0]
+    if field == "file_path" and subject:
+        p = resolve(subject, cwd)
+        return [subject, p, os.path.realpath(p)]
+    return [subject, normalize_shell(subject)]
+
+
+def self_protect(tool, tool_input, cwd):
+    if tool == "Bash":
+        return bash_touches_guardrail(str(tool_input.get("command", "")), cwd)
+    if tool in FILE_TOOLS:
+        p = path_of(tool_input)
+        return bool(p) and touches_guardrail(p, cwd)
+    # any other tool routed to this hook (for example mcp__* file servers):
+    # deny if any string argument names or resolves into the guardrail
+    for s in strings_in(tool_input):
+        if len(s) < 4096 and ("/" in s or s.startswith("~")) and touches_guardrail(s, cwd):
+            return True
+    return False
 
 
 def main():
@@ -37,33 +78,54 @@ def main():
     tool_input = event.get("tool_input") or {}
     if not isinstance(tool_input, dict):
         deny("claude-guardrail: tool_input is not a JSON object, failing closed.")
+    cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else None
+    base0 = {"tool": tool, "session": event.get("session_id"), "mode": event.get("permission_mode")}
+
+    if tool == "Bash" and len(str(tool_input.get("command", ""))) > MAX_BASH:
+        receipt(dict(base0, rule="oversized", decision="deny", approvable=False,
+                     subject=str(tool_input.get("command", ""))[:500]))
+        deny("claude-guardrail [oversized]: The command is longer than %d characters, too long to "
+             "check reliably. Split it into smaller commands. This cannot be approved from inside "
+             "the session." % MAX_BASH)
+
+    if self_protect(tool, tool_input, cwd):
+        receipt(dict(base0, rule="self-protect", decision="deny", approvable=False,
+                     subject=json.dumps(tool_input, sort_keys=True)[:500]))
+        deny("claude-guardrail [self-protect]: " + SELF_WHY)
+
     cfg = load_json(RULES, None)
-    if not cfg:
-        deny("claude-guardrail: rules.json missing or invalid at %s, failing closed." % RULES)
+    if not cfg or not isinstance(cfg.get("rules"), list) or not cfg["rules"]:
+        deny("claude-guardrail: rules.json missing, invalid or empty at %s, failing closed." % RULES)
     ttl = int(cfg.get("approval_ttl_seconds", 600))
 
-    for rule in cfg.get("rules", []):
+    for rule in cfg["rules"]:
         if tool not in rule.get("tools", []):
             continue
-        subject = subject_for(tool, tool_input, rule.get("field"))
-        flags = re.IGNORECASE if rule.get("ignore_case") else 0
-        if not re.search(rule["pattern"], subject, flags | re.MULTILINE):
+        field = rule.get("field")
+        subject = subject_for(tool, tool_input, field)
+        flags = (re.IGNORECASE if rule.get("ignore_case") else 0) | re.MULTILINE
+        variants = variants_for(tool, subject, field, cwd)
+        need = rule.get("requires")  # cheap prefilter: skip the regex if no keyword appears
+        if need and not any(w.lower() in v.lower() for v in variants for w in need):
             continue
-        base = {"tool": tool, "rule": rule["id"], "subject": subject[:500],
-                "session": event.get("session_id"), "mode": event.get("permission_mode")}
+        if not any(re.search(rule["pattern"], v, flags) for v in variants):
+            continue
+        base = dict(base0, rule=rule["id"], subject=subject[:500])
         if not rule.get("approvable", True):
             receipt(dict(base, decision="deny", approvable=False))
             deny("claude-guardrail [%s]: %s This cannot be approved from inside the session." % (rule["id"], rule["why"]))
-        code = fingerprint(tool, subject)
-        approvals = load_json(APPROVALS, {})
-        now = time.time()
-        approvals = {k: v for k, v in approvals.items() if v.get("expires", 0) > now}
-        if code in approvals:
-            approvals.pop(code)
-            save_json(APPROVALS, approvals)
-            receipt(dict(base, decision="allow", code=code, via="human-approval"))
-            sys.exit(0)  # silence = normal permission flow continues
-        save_json(APPROVALS, approvals)
+        code, sha = fingerprint(tool, subject), digest(tool, subject)
+        with locked():
+            st = load_state()
+            a = st["approved"].get(code)
+            if a and a.get("sha") == sha:
+                st["approved"].pop(code)
+                save_json(APPROVALS, st)
+                receipt(dict(base, decision="allow", code=code, via="human-approval"))
+                sys.exit(0)  # silence = normal permission flow continues
+            st["pending"][code] = {"sha": sha, "tool": tool, "rule": rule["id"],
+                                   "subject": subject[:2000], "expires": time.time() + ttl}
+            save_json(APPROVALS, st)
         receipt(dict(base, decision="deny", code=code))
         deny("claude-guardrail [%s]: %s Blocked. Approval code %s. Ask the human to run "
              "`cg-approve %s` in their own terminal (valid %d min, this exact command only), "

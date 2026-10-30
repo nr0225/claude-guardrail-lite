@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Human-side approval. Needs a real terminal, so the agent's Bash tool can't use it."""
+"""Human-side approval. Needs a real terminal, and only approves a call the hook actually blocked."""
 import os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from cg_common import RULES, APPROVALS, load_json, save_json, receipt
+from cg_common import RULES, APPROVALS, load_json, save_json, receipt, locked, load_state
 
 
 def main():
@@ -14,14 +14,30 @@ def main():
         tty = open("/dev/tty", "w")
     except OSError:
         print("cg-approve needs an interactive terminal; refusing."); sys.exit(2)
-    tty.write("Approve %s for one run? Type the code again to confirm: " % code); tty.flush()
+    with locked():
+        pend = load_state()["pending"].get(code)
+    if not pend:
+        tty.write("No blocked call with code %s in the last few minutes. Nothing approved.\n" % code)
+        sys.exit(4)
+    subj = pend.get("subject", "")
+    tty.write("Blocked call %s\n  tool: %s\n  rule: %s\n  %s\n" % (
+        code, pend.get("tool"), pend.get("rule"),
+        subj if len(subj) <= 1000 else subj[:1000] + " ...(%d more chars)" % (len(subj) - 1000)))
+    tty.write("Approve this exact call for one run? Type the code again to confirm: "); tty.flush()
     if tty_in.readline().strip().upper() != code:
         tty.write("Not approved.\n"); sys.exit(3)
     ttl = int(load_json(RULES, {}).get("approval_ttl_seconds", 600))
-    approvals = load_json(APPROVALS, {})
-    approvals[code] = {"expires": time.time() + ttl}
-    save_json(APPROVALS, approvals)
-    receipt({"decision": "approved", "code": code, "via": "cg-approve"})
+    with locked():
+        st = load_state()
+        cur = st["pending"].get(code)
+        if not cur or cur.get("sha") != pend.get("sha"):
+            tty.write("The blocked call for %s changed while you were confirming. Nothing approved.\n" % code)
+            sys.exit(5)
+        st["pending"].pop(code)
+        st["approved"][code] = {"sha": cur["sha"], "expires": time.time() + ttl}
+        save_json(APPROVALS, st)
+    receipt({"decision": "approved", "code": code, "via": "cg-approve", "rule": cur.get("rule"),
+             "subject": subj[:500]})
     tty.write("Approved %s for %d min. Tell Claude to retry the same command.\n" % (code, ttl // 60))
 
 
